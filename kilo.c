@@ -11,6 +11,8 @@
 /*atexit
   exit*/
 #include <stdlib.h>
+/*ioctl*/
+#include <sys/ioctl.h>
 /*read
   write
   STDIN_FILENO
@@ -38,7 +40,14 @@
 
 /*** data ***/
 
-struct termios originalTermios;
+/*Global editor data*/
+struct editorConfig {
+  int screenrows;
+  int screencols;
+  struct termios originalTermios;
+};
+
+struct editorConfig config;
 
 /*** terminal **/
 
@@ -58,17 +67,17 @@ void Die(const char *s) {
 /*Disables raw mode*/
 void DisableRawMode() {
   /*Resets terminal attributes to starting state*/
-  if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &originalTermios) == -1)
+  if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &config.originalTermios) == -1)
     Die("tcsetattr");
 }
 
 /*Enables raw mode*/
 void EnableRawMode() {
   /*Read current terminal attributes into a struct*/
-  if (tcgetattr(STDIN_FILENO, &originalTermios) == -1) Die ("tcgetattr");
+  if (tcgetattr(STDIN_FILENO, &config.originalTermios) == -1) Die ("tcgetattr");
   atexit(DisableRawMode);
   
-  struct termios raw = originalTermios;
+  struct termios raw = config.originalTermios;
   /*Modify the struct
     ~ - bitwise-NOT operator
     & - bitwise-AND operator
@@ -120,12 +129,54 @@ char EditorReadKey() {
   return c;
 }
 
+int GetCursorPosition(int *rows, int *cols) {
+  if (write(STDOUT_FILENO, "\x1b[6n", 4) != 4) return -1;
+
+  printf("\r\n");
+  char c;
+
+  while (read(STDIN_FILENO, %c, 1) == 1) {
+    if (iscntrl(c)) {
+      printf("%d\r\n", c);
+    }
+    else {
+      printf("%d ('%c')\r\n", c, c);
+    }
+  }
+
+  EditorReadKey();
+
+  return -1;
+
+}
+
+/*Finds the size of terminal and stores height and width into 
+  passed params*/
+int GetWindowSize(int *rows, int *cols) {
+  struct winsize ws;
+  
+  /*Returns window size of terminal*/
+  if (1 || ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
+    /*Moves the cursor to the end of the screen by using C and B cmds
+      C - cursor forward
+      B - cursor down
+      B and C stop the cursor from going past the edge of the screen*/
+    if (write(STDOUT_FILENO, "\x1b[999C\x1b[999B", 12) != 12) return -1;
+    return GetCursorPosition(rows, cols);
+  }
+  else {
+    *cols = ws.ws_col;
+    *rows = ws.ws_row;
+    return 0;
+  }
+}
+
 /*** output ***/
 
 void EditorDrawRows() {
   int y;
 
-  for (y = 0; y < 24; y++) {
+  for (y = 0; y < config.screenrows; y++) {
     write(STDOUT_FILENO, "~\r\n", 3);
   }
 }
@@ -140,6 +191,9 @@ void EditorRefreshScreen() {
     H - cursor position cmd*/   
   write(STDOUT_FILENO, "\x1b[2J", 4);
   write(STDOUT_FILENO, "\x1b[H", 3);
+
+  EditorDrawRows();
+  write(STDOUT_FILENO, "\x1b[H", 3);
 }
 
 /*** input ***/
@@ -150,8 +204,8 @@ void EditorProcessKeypress () {
 
   switch (c) {
     case CTRL_KEY('q'):
-    write(STDOUT_FILENO, "\x1b[2J", 4);
-    write(STDOUT_FILENO, "\x1b[H", 3);
+      write(STDOUT_FILENO, "\x1b[2J", 4);
+      write(STDOUT_FILENO, "\x1b[H", 3);
       exit(0);
       break;
   }
@@ -159,8 +213,15 @@ void EditorProcessKeypress () {
 
 /*** init ***/
 
+// Initializes the fields in config struct
+void InitEditor() {
+  if (GetWindowSize(&config.screenrows, &config.screencols) == -1) 
+    Die("GetWindow size");
+}
+
 int main() {
   EnableRawMode();
+  InitEditor();
 
   while (1) {
     EditorRefreshScreen();
